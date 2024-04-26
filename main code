@@ -1,0 +1,158 @@
+import cv2
+import os
+import pickle
+import face_recognition
+import numpy as np
+import cvzone
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import db
+from firebase_admin import storage
+
+folderPath = 'C:\\Users\\asang\\Desktop\\pythonCodes\\images'
+pathList = os.listdir(folderPath)
+
+cred = credentials.Certificate("serviceAccountKey.json")
+firebase_admin.initialize_app(cred, {'databaseURL': "https://faceattandance-178e8-default-rtdb.firebaseio.com/"})
+                                    #'storageBucket': "faceattandance-178e8.appspot.com/C:/Users/asang/Desktop/pythonCodes/images"
+                                    #})
+
+#bucket=storage.bucket()
+cap = cv2.VideoCapture(0)
+cap.set(3, 640)
+cap.set(4, 480)
+
+imgBackground = cv2.imread('C:/Users/asang/Pictures/new_box.jpg')
+
+# Importing mode images into a list
+folderModePath = 'C:\\Users\\asang\\Desktop\\pythonCodes\\BI.png'
+modePathList = os.listdir(folderModePath)
+imgModeList = []
+
+for path in modePathList:
+    imgMode = cv2.imread(os.path.join(folderModePath, path))
+    # Resize mode image to the desired dimensions
+    imgMode = cv2.resize(imgMode, (300, 370))  # Adjust dimensions as needed
+    imgModeList.append(imgMode)
+
+# Load the encoding file
+file = open('EncodeFile.p', 'rb')
+encodeListKnownWithIds = pickle.load(file)
+file.close()
+encodeListKnown, studentIds = encodeListKnownWithIds
+
+folderPath = 'C:\\Users\\asang\\Desktop\\pythonCodes\\images/'
+imgList = []
+studentIds = []
+
+for path in pathList:
+    img = cv2.imread(os.path.join(folderPath, path))
+    imgList.append(img)
+    studentIds.append(os.path.splitext(path)[0])
+
+    # filename = os.path.join(folderPath, path)
+    # bucket = storage.bucket()  # Access the storage bucket
+    # blob = bucket.blob(filename)
+
+    # if blob.exists():  # Check if blob exists
+    #     # Download blob as string
+    #     blob_content = blob.download_as_string()
+    #     if blob_content:  # Check if content is retrieved successfully
+    #         array = np.frombuffer(blob_content, dtype=np.uint8)
+    #         # Process the array as needed
+    #         # For example, you can convert it to an image using cv2.imdecode()
+    #         # image = cv2.imdecode(array, cv2.IMREAD_COLOR)
+    #         # Continue with your processing
+    #     else:
+    #         print("Failed to retrieve blob content.")
+    # else:
+    #     print("Blob does not exist:", filename)
+
+modeType = 0
+counter = 0
+id = -1
+# imgStudent= []
+
+while True:
+    success, img = cap.read()
+    imgS = cv2.resize(img, (0, 0), None, 0.25, 0.25)
+    imgS = cv2.cvtColor(imgS, cv2.COLOR_BGR2RGB)
+    faceCurFrame = face_recognition.face_locations(imgS)
+    encodeCurFrame = face_recognition.face_encodings(imgS, faceCurFrame)
+
+    new_width = 520  # Adjust the new width as needed
+    img_resized = cv2.resize(img, (new_width, int(img.shape[0] * (new_width / img.shape[1]))))
+
+    bg_height, bg_width, _ = imgBackground.shape
+    img_height, img_width, _ = img_resized.shape
+    start_y = int((bg_height - img_height) / 1.5)
+    start_x = int((bg_width - img_width) / 15)
+    start1_y = int((bg_height - 400) / 3)  # Adjusted height for the resized mode image
+    start1_x = int((bg_width - 300) / 1.08)  # Adjusted width for the resized mode image
+
+    # Replace the portion of imgBackground with the resized live camera feed image
+    imgBackground[start_y:start_y + img_height, start_x:start_x + img_width] = img_resized
+    # Overlay the resized mode image from imgModeList onto imgBackground
+    imgBackground[start1_y:start1_y + 370, start1_x:start1_x + 300] = imgModeList[modeType]  # Adjust position and size as needed
+
+    for encodeFace, faceLoc in zip(encodeCurFrame, faceCurFrame):
+        matches = face_recognition.compare_faces(encodeListKnown, encodeFace)
+        faceDis = face_recognition.face_distance(encodeListKnown, encodeFace)
+        matchIndex = np.argmin(faceDis)
+        if matches[matchIndex]:
+            y1, x2, y2, x1 = faceLoc
+            y1, x2, y2, x1 = y1 * 4, x2 * 4, y2 * 4, x1 * 4
+            bbox = start_x + x1 - 50, start_y + y1 - 30, x2 - x1, y2 - y1
+            imgBackground = cvzone.cornerRect(imgBackground, bbox, rt=0)
+            id = studentIds[matchIndex]
+            print(id)
+            if counter == 0:
+                counter = 1
+                modeType = 1
+
+    if counter != 0:
+        if counter == 1:
+            # Get the data
+            studentInfo = db.reference(f'Students/{id}').get()
+            print(studentInfo)
+            # Get the image from storage
+            # blob=bucket.get_blob(f'images/{id}.jpg')
+            # array=np.frombuffer(blob.download_as_string() ,np.unit8)
+            # imgStudent =cv2.imdecode(array,cv2.COLOR_BGRA2BGR)
+      #  (W,H),_=cv2.getTextSize(studentInfo['name'],cv2.FONT_HERSHEY_COMPLEX,1,1)
+      #  OFFSET=(start1_x-W)//2
+            #UPDATE DATA OF ATTANDANCE
+            ref=db.reference(f'Students/{id}')
+            studentInfo['total_attendance']+=1
+            ref.child('total_attendance').set(studentInfo['total_attendance'])
+
+      
+        if 10 <counter <20:
+            modeType=2
+        imgBackground[start1_y:start1_y + 370, start1_x:start1_x + 300] = imgModeList[modeType]  # Adjust position and size as needed
+
+
+
+        if counter<=10:
+            cv2.putText(imgBackground, str(studentInfo['total_attendance']),(start1_x + 40, start_y - 7), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 0, 0))
+            cv2.putText(imgBackground, str(studentInfo['name']),(start1_x + 140, start_y + 180), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 0))
+
+        
+
+            cv2.putText(imgBackground, str(studentInfo['roll_No']),(start1_x + 135, start_y + 210), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 0))
+            cv2.putText(imgBackground, str(studentInfo['year']),(start1_x + 135, start_y + 250), cv2.FONT_HERSHEY_COMPLEX, 0.5, (0, 0, 0))
+
+
+        counter += 1
+        if counter>=20:
+            counter=0
+            modeType=0
+            studentInfo=[]
+            imgBackground[start1_y:start1_y + 370, start1_x:start1_x + 300] = imgModeList[modeType]  # Adjust position and size as needed
+
+
+            
+        
+
+    cv2.imshow("face attendance", imgBackground)
+    cv2.waitKey(1)
